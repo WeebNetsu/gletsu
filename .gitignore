@@ -1,3 +1,5 @@
+.env
+
 *.beam
 *.ez
 /build
