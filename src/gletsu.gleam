@@ -2,25 +2,23 @@ import gleam/io
 import gleam/list
 import gleam/result
 import kitsu/anime/fetch
-import kitsu/models
+import kitsu/constants
 import loader
-
-// import telegram_bot
 
 pub fn main() {
   let env_load_success = loader.load_env()
 
   case env_load_success {
     True -> {
-      let x =
-        result.unwrap(
-          fetch.get_anime_list(),
-          models.KitsuAnimeResponse(data: []),
-        )
+      let anime =
+        result.unwrap(fetch.get_anime_list(), constants.base_anime_response)
 
-      let first_item = result.unwrap(list.first(x.data), models.AnimeItem("2"))
+      let first_item =
+        result.unwrap(list.first(anime.data), constants.base_anime_item)
 
       echo first_item.id
+      echo anime.meta.count
+      echo anime.links.first
       //   telegram_bot.start()
 
       Ok(Nil)
