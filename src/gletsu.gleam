@@ -1,34 +1,34 @@
+import dot_env
+import dot_env/env
 import gleam/io
 import gleam/list
-import gleam/option
-import gleam/result
-import kitsu/anime/fetch
-import kitsu/constants
-import loader
+import gletsu/telegram_bot
+
+/// Load initial important env files, false if failed
+pub fn load_env() -> Bool {
+  dot_env.new()
+  |> dot_env.set_path("./.env")
+  |> dot_env.set_debug(False)
+  |> dot_env.load
+
+  list.map(["BOT_TOKEN", "API_URL"], fn(var) {
+    case env.get_string(var) {
+      Ok(_) -> True
+      Error(err) -> {
+        io.println_error("something went wrong: " <> err)
+        False
+      }
+    }
+  })
+  |> list.all(fn(val) { val == True })
+}
 
 pub fn main() {
-  let env_load_success = loader.load_env()
+  let env_load_success = load_env()
 
   case env_load_success {
     True -> {
-      let anime =
-        result.unwrap(fetch.get_anime_list(), constants.base_anime_response)
-
-      let first_item =
-        result.unwrap(list.first(anime.data), constants.base_anime_item)
-
-      case first_item.attributes {
-        option.Some(val) -> {
-          echo val.canonical_title
-          Nil
-        }
-        _ -> {
-          echo "Nothing"
-          Nil
-        }
-      }
-
-      //   telegram_bot.start()
+      telegram_bot.start()
 
       Ok(Nil)
     }
