@@ -9,6 +9,11 @@ import gleam/json
 import gleam/option
 import gleam/result
 
+pub type KitsuError {
+  JsonParseError
+  RequestError
+}
+
 // ------------- MARK: Types
 pub type AnimeItem {
   AnimeItem(
@@ -149,30 +154,10 @@ pub fn http_get_request(
       Ok(resp)
     }
     Error(_) -> {
-      io.print_error("Could not make get request")
+      io.println_error("Could not make get request")
       Error(Nil)
     }
   }
-  //   case request.to(api_url <> endpoint) {
-  //     Ok(base_req) -> {
-  //   let req =
-  //     request.set_method(base_req, http.Get)
-  //     |> request.prepend_header("accept", "application/vnd.api+json")
-
-  // // Send the HTTP request to the server
-  // result.try(httpc.send(req), fn(resp) {
-  //   let content_type = response.get_header(resp, "content-type")
-  //   assert content_type == Ok("application/vnd.api+json")
-
-  //   Ok(resp)
-  // })
-  //     }
-  //     Error(_) -> {
-  //       io.print_error("Could not make request to api")
-  //     //   how do I handle httpc.httperror?
-  //       Ok("???")
-  //     }
-  //   }
 }
 
 // ------------- MARK: Decoders
@@ -546,14 +531,30 @@ pub fn anime_response_decoder() -> decode.Decoder(KitsuAnimeResponse) {
 
 // ------------- MARK: Requests
 
-pub fn get_anime_list() -> Result(KitsuAnimeResponse, Nil) {
-  use resp <- result.try(http_get_request("/anime"))
+pub fn get_anime_list() -> Result(KitsuAnimeResponse, KitsuError) {
+  use resp <- result.try(
+    // map error into my own custom type
+    http_get_request("/anime") |> result.map_error(fn(_) { RequestError }),
+  )
 
-  case json.parse(from: resp.body, using: anime_response_decoder()) {
-    Ok(res) -> Ok(res)
-    Error(err) -> {
+  use res <- result.try(
+    json.parse(from: resp.body, using: anime_response_decoder())
+    |> result.map_error(fn(err) {
       echo err
-      Ok(base_anime_response)
-    }
-  }
+      JsonParseError
+    }),
+  )
+
+  Ok(res)
+  //   below is same as above, but above may be cleaner?
+  //   case json.parse(from: resp.body, using: anime_response_decoder()) {
+  //     Ok(res) -> Ok(res)
+  //     // error is of type json.DecodeError
+  //     Error(err) -> {
+  //       // it contains data, not sure how to extract it, so simply put in echo for easier debugging later if needed
+  //       echo err
+  //       // result in my own defined error to make it easier to manage
+  //       Error(JsonParseError)
+  //     }
+  //   }
 }

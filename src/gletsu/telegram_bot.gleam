@@ -8,10 +8,23 @@ import gleam/string
 import gletsu/kitsu
 import telega
 import telega/bot
+import telega/format
+import telega/model/types
 import telega/reply
 import telega/router
 import telega/update
 import telega_httpc
+
+pub type BotError {
+  /// empty arrays
+  EmptyResultError
+  /// usually if an optional result is nil
+  NoValueError
+  /// could not make request, usually because a kitsu error was given
+  FailedRequestError
+  /// could not complete a telegram request
+  TelegramError
+}
 
 fn handle_text(ctx, text) {
   use ctx <- telega.log_context(ctx, "echo_text")
@@ -19,78 +32,173 @@ fn handle_text(ctx, text) {
   Ok(ctx)
 }
 
-fn handle_list_anime_command(ctx: bot.Context(a, b)) {
-  let anime = kitsu.get_anime_list()
+fn handle_list_anime_command(ctx: bot.Context(a, b)) -> Result(Nil, BotError) {
+  use anime <- result.try(
+    kitsu.get_anime_list() |> result.map_error(fn(_) { FailedRequestError }),
+  )
 
-  case anime {
-    Ok(res) -> {
-      let anime_list =
-        list.map(res.data, fn(anime_item: kitsu.AnimeItem) {
-          let canonical_title = case
-            option.to_result(anime_item.attributes, "attributes do not exist")
-          {
-            Ok(attributes) -> {
-              option.unwrap(attributes.canonical_title, "N/A")
-            }
-            Error(err) -> {
-              io.print_error(err)
-              "N/A"
-            }
-          }
-
-          anime_item.id <> " - " <> canonical_title
-        })
-
-      case list.is_empty(anime_list) {
-        True -> {
-          case
-            reply.with_text(
-              ctx,
-              "Failed to list anime - could not generate list",
-            )
-          {
-            Ok(_) -> Nil
-            Error(_) -> {
-              io.print_error("Fetched list was empty")
-            }
-          }
+  let anime_list =
+    list.map(anime.data, fn(anime_item: kitsu.AnimeItem) {
+      let canonical_title = case
+        option.to_result(anime_item.attributes, "attributes do not exist")
+      {
+        Ok(attributes) -> {
+          option.unwrap(attributes.canonical_title, "N/A")
         }
-        False -> Nil
-      }
-
-      case reply.with_text(ctx, string.join(anime_list, "\n")) {
-        Ok(_) -> Nil
         Error(err) -> {
-          echo err
-          io.print_error("Could not send with text")
+          io.println_error(err)
+          "N/A"
         }
       }
+
+      anime_item.id <> " - " <> canonical_title
+    })
+
+  case anime_list {
+    // will match an empty list
+    [] -> {
+      use _ <- result.try(
+        reply.with_text(ctx, "Failed to list anime - could not generate list")
+        |> result.map_error(fn(_) { TelegramError }),
+      )
+
+      Error(EmptyResultError)
     }
-    Error(_) -> {
-      case reply.with_text(ctx, "Failed to list anime. Is Kitsu down?") {
-        Ok(_) -> Nil
-        Error(_) -> {
-          io.print_error("Could not send with text")
-        }
-      }
+    rest -> {
+      let formatted =
+        format.build()
+        |> format.bold_text("Select An Anime")
+        |> format.to_formatted()
+
+      use _ <- result.try(
+        reply.with_formatted_markup(
+          ctx,
+          formatted,
+          types.SendMessageReplyReplyKeyboardMarkupParameters(
+            types.ReplyKeyboardMarkup(
+              input_field_placeholder: option.None,
+              is_persistent: option.None,
+              keyboard: [
+                [
+                  types.KeyboardButton(
+                    text: "Previous Page",
+                    icon_custom_emoji_id: option.None,
+                    request_chat: option.None,
+                    request_contact: option.None,
+                    request_location: option.None,
+                    request_managed_bot: option.None,
+                    request_poll: option.None,
+                    request_users: option.None,
+                    style: option.None,
+                    web_app: option.None,
+                  ),
+                  types.KeyboardButton(
+                    text: "Quit",
+                    icon_custom_emoji_id: option.None,
+                    request_chat: option.None,
+                    request_contact: option.None,
+                    request_location: option.None,
+                    request_managed_bot: option.None,
+                    request_poll: option.None,
+                    request_users: option.None,
+                    style: option.None,
+                    web_app: option.None,
+                  ),
+                  types.KeyboardButton(
+                    text: "Next Page",
+                    icon_custom_emoji_id: option.None,
+                    request_chat: option.None,
+                    request_contact: option.None,
+                    request_location: option.None,
+                    request_managed_bot: option.None,
+                    request_poll: option.None,
+                    request_users: option.None,
+                    style: option.None,
+                    web_app: option.None,
+                  ),
+                ],
+                ..list.map(rest, fn(title) {
+                  [
+                    types.KeyboardButton(
+                      text: title,
+                      icon_custom_emoji_id: option.None,
+                      request_chat: option.None,
+                      request_contact: option.None,
+                      request_location: option.None,
+                      request_managed_bot: option.None,
+                      request_poll: option.None,
+                      request_users: option.None,
+                      style: option.None,
+                      web_app: option.None,
+                    ),
+                  ]
+                })
+              ],
+              one_time_keyboard: option.None,
+              resize_keyboard: option.None,
+              selective: option.None,
+            ),
+          ),
+        )
+        |> result.map_error(fn(err) {
+          echo err
+          io.println_error("Could not send with text")
+          TelegramError
+        }),
+      )
+
+      Ok(Nil)
     }
   }
 }
 
-fn handle_command(ctx: bot.Context(a, b), command: update.Command) {
+fn handle_command_error_display(err: BotError) -> Nil {
+  case err {
+    TelegramError ->
+      io.println_error("A telegram request failed. Could not execute command")
+    NoValueError | EmptyResultError ->
+      io.println_error(
+        "An empty error value error has caused no result to be returned",
+      )
+    FailedRequestError ->
+      io.println_error(
+        "Failed to make some requests. This is most likely related to Kitsu",
+      )
+    // _ -> io.println_error("")
+  }
+}
+
+fn handle_command(
+  ctx: bot.Context(a, b),
+  command: update.Command,
+) -> Result(bot.Context(a, b), b) {
   use ctx <- telega.log_context(ctx, "handle_command")
 
   case command.text {
-    "/search" -> handle_list_anime_command(ctx)
+    "/search" -> {
+      let _ =
+        result.map_error(
+          handle_list_anime_command(ctx),
+          handle_command_error_display,
+        )
+      Nil
+    }
     "/search" <> search_term -> {
       let cleaned_search = string.trim(search_term)
-      let assert Ok(_) =
-        reply.with_text(ctx, "Yes let me search " <> cleaned_search)
+
+      let _ =
+        result.map_error(
+          reply.with_text(ctx, "Yes let me search " <> cleaned_search),
+          fn(_) { io.println_error("Could not execute command") },
+        )
       Nil
     }
     _ -> {
-      let assert Ok(_) =
-        reply.with_text(ctx, "Unknown command: " <> command.text)
+      let _ =
+        result.map_error(
+          reply.with_text(ctx, "Unknown command: " <> command.text),
+          fn(_) { io.println_error("Could not execute command") },
+        )
       Nil
     }
   }
