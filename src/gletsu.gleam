@@ -1,7 +1,10 @@
 import dot_env
 import dot_env/env
+import gleam/erlang/node
 import gleam/io
 import gleam/list
+import gleam/option
+import gleam/otp/actor
 import gletsu/telegram_bot
 
 /// Load initial important env files, false if failed
@@ -24,11 +27,19 @@ pub fn load_env() -> Bool {
 }
 
 pub fn main() {
-  let env_load_success = load_env()
-
-  case env_load_success {
+  case load_env() {
     True -> {
-      telegram_bot.start()
+      let assert Ok(bot_actor) =
+        actor.new(telegram_bot.BotState(
+          last_command: option.None,
+          user_id: option.None,
+          chat_id: option.None,
+          page: option.None,
+        ))
+        |> actor.on_message(telegram_bot.handle_actor_message)
+        |> actor.start
+
+      telegram_bot.start(bot_actor)
 
       Ok(Nil)
     }

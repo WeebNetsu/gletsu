@@ -3,6 +3,7 @@ import gleam/erlang/process
 import gleam/io
 import gleam/list
 import gleam/option
+import gleam/otp/actor
 import gleam/result
 import gleam/string
 import gletsu/kitsu
@@ -24,17 +25,84 @@ pub type BotError {
   FailedRequestError
   /// could not complete a telegram request
   TelegramError
+  //   something the user sent that was wrong
+  InvalidCommandError
+  //   a command was givin that requires a prior action state but had none
+  NoPriorStateError
 }
 
-fn handle_text(ctx, text) {
-  use ctx <- telega.log_context(ctx, "echo_text")
-  let assert Ok(_) = reply.with_text(ctx, text)
+// the "message" is what "happens" and the "state" is what is remembered
+pub type BotState {
+  BotState(
+    last_command: option.Option(String),
+    user_id: option.Option(Int),
+    chat_id: option.Option(Int),
+    page: option.Option(Int),
+  )
+}
+
+pub type BotMessage {
+  StoreContext(
+    command: String,
+    user_id: Int,
+    chat_id: Int,
+    page: option.Option(Int),
+  )
+  //   "(like a return address) so the actor can reply back to us"
+  GetContext(process.Subject(BotState))
+}
+
+fn handle_text(
+  ctx: bot.Context(a, b),
+  text: String,
+  bot_actor: actor.Started(process.Subject(BotMessage)),
+) -> Result(bot.Context(a, b), BotError) {
+  let storage = actor.call(bot_actor.data, waiting: 10, sending: GetContext)
+
+  let command_result = case storage.last_command, text, storage.page {
+    option.Some("/search"), "Previous Page", option.Some(page) if page > 1 -> {
+      reply.with_text(ctx, "Will go back to previous page")
+      |> result.map_error(fn(_) { InvalidCommandError })
+    }
+    option.Some("/search"), "Previous Page", option.Some(page) if page <= 1 -> {
+      reply.with_text(ctx, "You are already at the first page!")
+      |> result.map_error(fn(_) { InvalidCommandError })
+    }
+    command, text, _ -> {
+      reply.with_text(
+        ctx,
+        "Unknown command ("
+          <> option.unwrap(command, "Invalid command")
+          <> ") for "
+          <> text
+          <> ": "
+          <> option.unwrap(storage.last_command, "(No Command)"),
+      )
+      |> result.map_error(fn(_) { NoPriorStateError })
+    }
+  }
+
+  use _ <- result.try(command_result)
   Ok(ctx)
 }
 
-fn handle_list_anime_command(ctx: bot.Context(a, b)) -> Result(Nil, BotError) {
+fn handle_list_anime_command(
+  ctx: bot.Context(a, b),
+  bot_actor: actor.Started(process.Subject(BotMessage)),
+  command: String,
+) -> Result(Nil, BotError) {
   use anime <- result.try(
     kitsu.get_anime_list() |> result.map_error(fn(_) { FailedRequestError }),
+  )
+
+  actor.send(
+    bot_actor.data,
+    StoreContext(
+      command:,
+      chat_id: ctx.update.chat_id,
+      page: option.Some(1),
+      user_id: ctx.update.from_id,
+    ),
   )
 
   let anime_list =
@@ -154,23 +222,32 @@ fn handle_list_anime_command(ctx: bot.Context(a, b)) -> Result(Nil, BotError) {
 
 fn handle_command_error_display(err: BotError) -> Nil {
   case err {
-    TelegramError ->
+    TelegramError -> {
       io.println_error("A telegram request failed. Could not execute command")
-    NoValueError | EmptyResultError ->
+    }
+    NoValueError | EmptyResultError -> {
       io.println_error(
         "An empty error value error has caused no result to be returned",
       )
-    FailedRequestError ->
+    }
+    FailedRequestError -> {
       io.println_error(
         "Failed to make some requests. This is most likely related to Kitsu",
       )
-    // _ -> io.println_error("")
+    }
+    InvalidCommandError -> {
+      io.println_error("Some invalid commands were retrieved")
+    }
+    NoPriorStateError -> {
+      io.println_error("Some state errors cause a no-response")
+    }
   }
 }
 
 fn handle_command(
   ctx: bot.Context(a, b),
   command: update.Command,
+  bot_actor: actor.Started(process.Subject(BotMessage)),
 ) -> Result(bot.Context(a, b), b) {
   use ctx <- telega.log_context(ctx, "handle_command")
 
@@ -178,7 +255,7 @@ fn handle_command(
     "/search" -> {
       let _ =
         result.map_error(
-          handle_list_anime_command(ctx),
+          handle_list_anime_command(ctx, bot_actor, command.text),
           handle_command_error_display,
         )
       Nil
@@ -206,15 +283,37 @@ fn handle_command(
   Ok(ctx)
 }
 
-fn build_routes() {
-  router.new("Gletsu")
-  |> router.on_any_text(handle_text)
-  |> router.on_commands(["search"], handle_command)
+pub fn handle_actor_message(
+  state: BotState,
+  message: BotMessage,
+) -> actor.Next(BotState, BotMessage) {
+  case message {
+    StoreContext(command, user_id, chat_id, page) -> {
+      let state =
+        BotState(
+          last_command: option.Some(command),
+          user_id: option.Some(user_id),
+          chat_id: option.Some(chat_id),
+          page:,
+        )
+      actor.continue(state)
+    }
+    GetContext(reply) -> {
+      actor.send(reply, state)
+      actor.continue(state)
+    }
+  }
 }
 
-pub fn start() {
+fn build_routes(bot_actor: actor.Started(process.Subject(BotMessage))) {
+  router.new("Gletsu")
+  |> router.on_any_text(fn(a, b) { handle_text(a, b, bot_actor) })
+  |> router.on_commands(["search"], fn(a, b) { handle_command(a, b, bot_actor) })
+}
+
+pub fn start(bot_actor: actor.Started(process.Subject(BotMessage))) {
   let bot_token = result.unwrap(env.get_string("BOT_TOKEN"), "")
-  let router = build_routes()
+  let router = build_routes(bot_actor)
 
   let assert Ok(_bot) =
     telega_httpc.new(bot_token)

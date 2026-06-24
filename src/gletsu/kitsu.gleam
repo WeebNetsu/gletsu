@@ -546,15 +546,4 @@ pub fn get_anime_list() -> Result(KitsuAnimeResponse, KitsuError) {
   )
 
   Ok(res)
-  //   below is same as above, but above may be cleaner?
-  //   case json.parse(from: resp.body, using: anime_response_decoder()) {
-  //     Ok(res) -> Ok(res)
-  //     // error is of type json.DecodeError
-  //     Error(err) -> {
-  //       // it contains data, not sure how to extract it, so simply put in echo for easier debugging later if needed
-  //       echo err
-  //       // result in my own defined error to make it easier to manage
-  //       Error(JsonParseError)
-  //     }
-  //   }
 }
